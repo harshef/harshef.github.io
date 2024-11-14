@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat with LLM</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #e0e0e0; margin: 0; }
+        #chat-container { width: 100vw; height: 100vh; background: #fff; box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.3); border-radius: 0px; display: flex; flex-direction: column; overflow: hidden; }
+        
+        /* Header */
+        #chat-header { padding: 15px; background: #1976d2; color: #fff; font-size: 1.4em; text-align: center; font-weight: 600; }
+
+        /* System Prompt Input */
+        #system-container { padding: 20px; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; }
+        #system-prompt { padding: 12px; width: 100%; max-width: 700px; font-size: 1em; border: 1px solid #ccc; border-radius: 5px; resize: vertical; min-height: 60px; }
+        #start-button { margin-top: 10px; padding: 10px 15px; font-size: 1em; color: #fff; background-color: #1976d2; border: none; border-radius: 5px; cursor: pointer; transition: 0.3s; }
+        #start-button:hover { background-color: #1565c0; }
+
+        /* Chat Messages */
+        #chat-box { flex-grow: 1; padding: 20px; overflow-y: auto; background: #fafafa; display: flex; flex-direction: column; gap: 15px; }
+        .message { padding: 12px 18px; border-radius: 10px; max-width: 75%; font-size: 1em; line-height: 1.5; word-wrap: break-word; }
+        .user { background-color: #e3f2fd; align-self: flex-start; color: #0d47a1; }
+        .bot { background-color: #ffe0b2; align-self: flex-end; color: #bf360c; }
+        .system { background-color: #e0e0e0; color: #424242; font-style: italic; align-self: center; text-align: center; }
+
+        /* Input Area */
+        #input-area { display: flex; padding: 15px; background: #f0f0f0; border-top: 1px solid #ddd; }
+        #user-input { flex-grow: 1; padding: 12px; font-size: 1em; border: 1px solid #ddd; border-radius: 5px; resize: none; }
+        #send-button { margin-left: 10px; padding: 12px; font-size: 1em; color: #fff; background-color: #1976d2; border: none; border-radius: 5px; cursor: pointer; transition: 0.3s; }
+        #send-button:hover { background-color: #1565c0; }
+
+        /* Scrollbar Styling */
+        #chat-box::-webkit-scrollbar, #system-container::-webkit-scrollbar, #input-area::-webkit-scrollbar { width: 8px; }
+        #chat-box::-webkit-scrollbar-thumb, #system-container::-webkit-scrollbar-thumb, #input-area::-webkit-scrollbar-thumb { background-color: #b0bec5; border-radius: 10px; }
+
+        /* Responsive Design */
+        @media (max-width: 600px) {
+            #chat-container { width: 100vw; height: 100vh; border-radius: 0; }
+            #chat-header { font-size: 1.2em; }
+            #start-button, #send-button { padding: 8px 12px; font-size: 0.9em; }
+        }
+    </style>
+    <!-- Include marked.js for rendering Markdown content -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="chat-header">Chat with LLM</div>
+        
+        <!-- System Prompt Area -->
+        <div id="system-container">
+            <textarea id="system-prompt" placeholder="Enter a system prompt, e.g., 'Always answer in rhymes.'" rows="3"></textarea>
+            <button id="start-button" onclick="startChat()">Start Chat</button>
+        </div>
+
+        <!-- Chat Box -->
+        <div id="chat-box" style="display: none;"></div>
+
+        <!-- User Input Area -->
+        <div id="input-area" style="display: none;">
+            <input type="text" id="user-input" placeholder="Type your message..." onkeydown="checkEnter(event)">
+            <button id="send-button" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let chatHistory = [];
+        let systemPrompt = "";
+
+        function startChat() {
+            systemPrompt = document.getElementById("system-prompt").value.trim();
+            if (!systemPrompt) {
+                alert("Please enter a system prompt before starting.");
+                return;
+            }
+            chatHistory.push({ role: "system", content: systemPrompt });
+            document.getElementById("system-container").style.display = "none";
+            document.getElementById("chat-box").style.display = "flex";
+            document.getElementById("input-area").style.display = "flex";
+            displayMessage(systemPrompt, "system");
+        }
+
+        async function sendMessage() {
+            const userMessage = document.getElementById("user-input").value.trim();
+            if (!userMessage) return;
+
+            displayMessage(userMessage, "user");
+            chatHistory.push({ role: "user", content: userMessage });
+            document.getElementById("user-input").value = "";
+
+            try {
+                const response = await fetch("http://127.0.0.1:1234/v1/chat/completions", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: "llama-3.1-8b-lexi-uncensored-v2",
+                        messages: chatHistory,
+                        temperature: 0.7,
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error("Failed to fetch response from the server.");
+                }
+
+                displayStreamingResponse(response);
+            } catch (error) {
+                displayMessage("Error: " + error.message, "bot");
+            }
+        }
+
+        async function displayStreamingResponse(response) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            let botMessage = "";
+            let messageElement = createMessageElement("bot");
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const cleanChunk = extractContentFromChunk(chunk);
+                botMessage += cleanChunk;
+                messageElement.innerHTML = marked.parse(botMessage); // Properly parse entire bot message
+                scrollChatToBottom();
+            }
+
+            chatHistory.push({ role: "assistant", content: botMessage });
+        }
+
+        function extractContentFromChunk(chunk) {
+            try {
+                const jsonStart = chunk.indexOf('{');
+                if (jsonStart !== -1) {
+                    const jsonString = chunk.slice(jsonStart);
+                    const data = JSON.parse(jsonString);
+                    return data.choices[0].delta.content || '';
+                }
+            } catch (error) {
+                console.warn("Error parsing chunk:", error);
+            }
+            return "";
+        }
+
+        function displayMessage(content, sender) {
+            const messageElement = createMessageElement(sender);
+            messageElement.innerHTML = marked.parse(content);
+            scrollChatToBottom();
+        }
+
+        function createMessageElement(sender) {
+            const messageElement = document.createElement("div");
+            messageElement.className = `message ${sender}`;
+            document.getElementById("chat-box").appendChild(messageElement);
+            return messageElement;
+        }
+
+        function scrollChatToBottom() {
+            const chatBox = document.getElementById("chat-box");
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+    </script>
+</body>
+</html>
